@@ -3,17 +3,68 @@ document.addEventListener("DOMContentLoaded", () => {
   const activitySelect = document.getElementById("activity");
   const signupForm = document.getElementById("signup-form");
   const messageDiv = document.getElementById("message");
+  const accountToggle = document.getElementById("account-toggle");
+  const accountMenu = document.getElementById("account-menu");
+  const accountStatus = document.getElementById("account-status");
+  const loginButton = document.getElementById("login-button");
+  const logoutButton = document.getElementById("logout-button");
+  const loginDialog = document.getElementById("login-dialog");
+  const loginForm = document.getElementById("login-form");
+  const loginError = document.getElementById("login-error");
+  const signupRestriction = document.getElementById("signup-restriction");
+  let isTeacher = false;
+  let messageTimer;
 
-  // Function to fetch activities from API
+  function escapeHTML(value) {
+    return String(value).replace(/[&<>"']/g, (character) => {
+      const entities = {
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      };
+      return entities[character];
+    });
+  }
+
+  function showMessage(text, className) {
+    messageDiv.textContent = text;
+    messageDiv.className = className;
+    messageDiv.classList.remove("hidden");
+    clearTimeout(messageTimer);
+    messageTimer = setTimeout(() => {
+      messageDiv.classList.add("hidden");
+    }, 5000);
+  }
+
+  async function updateTeacherStatus() {
+    const response = await fetch("/auth/me");
+    if (!response.ok) {
+      throw new Error("Unable to verify teacher login.");
+    }
+    const account = await response.json();
+    isTeacher = account.authenticated;
+    accountStatus.textContent = isTeacher
+      ? `Signed in as ${account.username}`
+      : "Public view";
+    loginButton.classList.toggle("hidden", isTeacher);
+    logoutButton.classList.toggle("hidden", !isTeacher);
+    signupForm.classList.toggle("hidden", !isTeacher);
+    signupRestriction.classList.toggle("hidden", isTeacher);
+  }
+
   async function fetchActivities() {
     try {
       const response = await fetch("/activities");
+      if (!response.ok) {
+        throw new Error("Activity request failed.");
+      }
       const activities = await response.json();
 
-      // Clear loading message
       activitiesList.innerHTML = "";
+      activitySelect.replaceChildren(activitySelect.options[0]);
 
-      // Populate activities list
       Object.entries(activities).forEach(([name, details]) => {
         const activityCard = document.createElement("div");
         activityCard.className = "activity-card";
@@ -21,7 +72,6 @@ document.addEventListener("DOMContentLoaded", () => {
         const spotsLeft =
           details.max_participants - details.participants.length;
 
-        // Create participants HTML with delete icons instead of bullet points
         const participantsHTML =
           details.participants.length > 0
             ? `<div class="participants-section">
@@ -30,7 +80,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 ${details.participants
                   .map(
                     (email) =>
-                      `<li><span class="participant-email">${email}</span><button class="delete-btn" data-activity="${name}" data-email="${email}">❌</button></li>`
+                      `<li><span class="participant-email">${escapeHTML(email)}</span>${
+                        isTeacher
+                          ? `<button class="delete-btn" data-activity="${escapeHTML(name)}" data-email="${escapeHTML(email)}" aria-label="Unregister ${escapeHTML(email)} from ${escapeHTML(name)}">Remove</button>`
+                          : ""
+                      }</li>`
                   )
                   .join("")}
               </ul>
@@ -38,9 +92,9 @@ document.addEventListener("DOMContentLoaded", () => {
             : `<p><em>No participants yet</em></p>`;
 
         activityCard.innerHTML = `
-          <h4>${name}</h4>
-          <p>${details.description}</p>
-          <p><strong>Schedule:</strong> ${details.schedule}</p>
+          <h4>${escapeHTML(name)}</h4>
+          <p>${escapeHTML(details.description)}</p>
+          <p><strong>Schedule:</strong> ${escapeHTML(details.schedule)}</p>
           <p><strong>Availability:</strong> ${spotsLeft} spots left</p>
           <div class="participants-container">
             ${participantsHTML}
@@ -49,14 +103,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
         activitiesList.appendChild(activityCard);
 
-        // Add option to select dropdown
         const option = document.createElement("option");
         option.value = name;
         option.textContent = name;
         activitySelect.appendChild(option);
       });
 
-      // Add event listeners to delete buttons
       document.querySelectorAll(".delete-btn").forEach((button) => {
         button.addEventListener("click", handleUnregister);
       });
@@ -67,9 +119,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Handle unregister functionality
   async function handleUnregister(event) {
-    const button = event.target;
+    const button = event.currentTarget;
     const activity = button.getAttribute("data-activity");
     const email = button.getAttribute("data-email");
 
@@ -78,83 +129,126 @@ document.addEventListener("DOMContentLoaded", () => {
         `/activities/${encodeURIComponent(
           activity
         )}/unregister?email=${encodeURIComponent(email)}`,
-        {
-          method: "DELETE",
-        }
+        { method: "DELETE" }
       );
-
       const result = await response.json();
-
-      if (response.ok) {
-        messageDiv.textContent = result.message;
-        messageDiv.className = "success";
-
-        // Refresh activities list to show updated participants
-        fetchActivities();
-      } else {
-        messageDiv.textContent = result.detail || "An error occurred";
-        messageDiv.className = "error";
+      if (!response.ok) {
+        throw new Error(result.detail || "An error occurred");
       }
 
-      messageDiv.classList.remove("hidden");
-
-      // Hide message after 5 seconds
-      setTimeout(() => {
-        messageDiv.classList.add("hidden");
-      }, 5000);
+      showMessage(result.message, "success");
+      await fetchActivities();
     } catch (error) {
-      messageDiv.textContent = "Failed to unregister. Please try again.";
-      messageDiv.className = "error";
-      messageDiv.classList.remove("hidden");
+      showMessage(error.message || "Failed to unregister. Please try again.", "error");
       console.error("Error unregistering:", error);
     }
   }
 
-  // Handle form submission
   signupForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
     const email = document.getElementById("email").value;
-    const activity = document.getElementById("activity").value;
+    const activity = activitySelect.value;
 
     try {
       const response = await fetch(
         `/activities/${encodeURIComponent(
           activity
         )}/signup?email=${encodeURIComponent(email)}`,
-        {
-          method: "POST",
-        }
+        { method: "POST" }
       );
-
       const result = await response.json();
-
-      if (response.ok) {
-        messageDiv.textContent = result.message;
-        messageDiv.className = "success";
-        signupForm.reset();
-
-        // Refresh activities list to show updated participants
-        fetchActivities();
-      } else {
-        messageDiv.textContent = result.detail || "An error occurred";
-        messageDiv.className = "error";
+      if (!response.ok) {
+        throw new Error(result.detail || "An error occurred");
       }
 
-      messageDiv.classList.remove("hidden");
-
-      // Hide message after 5 seconds
-      setTimeout(() => {
-        messageDiv.classList.add("hidden");
-      }, 5000);
+      showMessage(result.message, "success");
+      signupForm.reset();
+      await fetchActivities();
     } catch (error) {
-      messageDiv.textContent = "Failed to sign up. Please try again.";
-      messageDiv.className = "error";
-      messageDiv.classList.remove("hidden");
+      showMessage(error.message || "Failed to sign up. Please try again.", "error");
       console.error("Error signing up:", error);
     }
   });
 
-  // Initialize app
-  fetchActivities();
+  accountToggle.addEventListener("click", () => {
+    const isExpanded = accountToggle.getAttribute("aria-expanded") === "true";
+    accountToggle.setAttribute("aria-expanded", String(!isExpanded));
+    accountMenu.classList.toggle("hidden", isExpanded);
+  });
+
+  loginButton.addEventListener("click", () => {
+    accountMenu.classList.add("hidden");
+    accountToggle.setAttribute("aria-expanded", "false");
+    loginError.classList.add("hidden");
+    loginForm.reset();
+    loginDialog.showModal();
+  });
+
+  document.getElementById("cancel-login").addEventListener("click", () => {
+    loginDialog.close();
+  });
+
+  loginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    loginError.classList.add("hidden");
+    const credentials = {
+      username: document.getElementById("username").value,
+      password: document.getElementById("password").value,
+    };
+
+    try {
+      const response = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(credentials),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.detail || "Unable to sign in.");
+      }
+
+      await updateTeacherStatus();
+      if (!isTeacher) {
+        throw new Error("The login could not be verified.");
+      }
+      loginForm.reset();
+      loginDialog.close();
+      await fetchActivities();
+      showMessage(result.message, "success");
+    } catch (error) {
+      loginError.textContent = error.message;
+      loginError.classList.remove("hidden");
+    }
+  });
+
+  logoutButton.addEventListener("click", async () => {
+    try {
+      const response = await fetch("/auth/logout", { method: "POST" });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.detail || "Unable to sign out.");
+      }
+      await updateTeacherStatus();
+      accountMenu.classList.add("hidden");
+      accountToggle.setAttribute("aria-expanded", "false");
+      await fetchActivities();
+      showMessage(result.message, "success");
+    } catch (error) {
+      showMessage(error.message || "Unable to sign out.", "error");
+      console.error("Error signing out:", error);
+    }
+  });
+
+  async function initialize() {
+    try {
+      await updateTeacherStatus();
+    } catch (error) {
+      showMessage(error.message, "error");
+      console.error("Error checking teacher login:", error);
+    }
+    await fetchActivities();
+  }
+
+  initialize();
 });
